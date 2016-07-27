@@ -1,7 +1,7 @@
 const NGSIM_TIMESTEP = 0.1 # [sec]
 const SMOOTHING_WIDTH_POS = 0.5 # [s]
 
-include(Pkg.dir("NGSIM", "src", "trajectory_smoothing.jl"))
+include(Pkg.dir("NGSIM", "src", "trajectory_smoothing_augment.jl"))
 
 # from "Estimating Acceleration and Lane-Changing
 #       Dynamics Based on NGSIM Trajectory Data"
@@ -40,7 +40,7 @@ end
 
 ###############
 
-type NGSIMTrajdata
+type NGSIMTrajdataAugment
     df         :: DataFrame
     car2start  :: Dict{Int, Int}         # maps carindex to starting index in the df
     frame2cars :: Dict{Int, Vector{Int}} # maps frame to list of carids in the scene
@@ -48,7 +48,7 @@ type NGSIMTrajdata
 
     ########## extracting the original raw data ##########
 
-    function NGSIMTrajdata(input_path::AbstractString, roadway::Roadway)
+    function NGSIMTrajdataAugment(input_path::AbstractString, roadway::Roadway)
 
         @assert(isfile(input_path))
 
@@ -82,14 +82,14 @@ end
 
 ########## extracting the specific data raw data ##########
 
-nframes(trajdata::NGSIMTrajdata) = maximum(keys(trajdata.frame2cars))
-carsinframe(trajdata::NGSIMTrajdata, frame::Int) = get(trajdata.frame2cars, frame, Int[]) # NOTE: memory allocation!
-carid_set(trajdata::NGSIMTrajdata) = Set(keys(trajdata.car2start)) # NOTE: memory allocation!
-nth_carid(trajdata::NGSIMTrajdata, frame::Int, n::Int) = trajdata.frame2cars[frame][n]
-first_carid(trajdata::NGSIMTrajdata, frame::Int) = nth_carid(trajdata, frame, 1)
-iscarinframe(trajdata::NGSIMTrajdata, carid::Int, frame::Int) = in(carid, carsinframe(trajdata, frame))
+nframes(trajdata::NGSIMTrajdataAugment) = maximum(keys(trajdata.frame2cars))
+carsinframe(trajdata::NGSIMTrajdataAugment, frame::Int) = get(trajdata.frame2cars, frame, Int[]) # NOTE: memory allocation!
+carid_set(trajdata::NGSIMTrajdataAugment) = Set(keys(trajdata.car2start)) # NOTE: memory allocation!
+nth_carid(trajdata::NGSIMTrajdataAugment, frame::Int, n::Int) = trajdata.frame2cars[frame][n]
+first_carid(trajdata::NGSIMTrajdataAugment, frame::Int) = nth_carid(trajdata, frame, 1)
+iscarinframe(trajdata::NGSIMTrajdataAugment, carid::Int, frame::Int) = in(carid, carsinframe(trajdata, frame))
 
-function car_df_index(trajdata::NGSIMTrajdata, carid::Int, frame::Int)
+function car_df_index(trajdata::NGSIMTrajdataAugment, carid::Int, frame::Int)
     #=
     given frame and carid, find index of car in trajdata
     Returns 0 if it does not exist
@@ -114,7 +114,7 @@ function car_df_index(trajdata::NGSIMTrajdata, carid::Int, frame::Int)
 
     retval
 end
-function get_frame_range(trajdata::NGSIMTrajdata, carid::Int)
+function get_frame_range(trajdata::NGSIMTrajdataAugment, carid::Int)
     lo = trajdata.car2start[carid]
     framestart = trajdata.df[lo, :frame]
 
@@ -124,7 +124,7 @@ function get_frame_range(trajdata::NGSIMTrajdata, carid::Int)
     framestart:frameend
 end
 
-function pull_vehicle_headings!(trajdata::NGSIMTrajdata;
+function pull_vehicle_headings!(trajdata::NGSIMTrajdataAugment;
     v_cutoff::Float64 = 2.5, # speeds below this will use a linearly interpolated heading [fps]
     smoothing_width::Float64 = 0.5, # [s]
     )
@@ -187,7 +187,7 @@ end
 
 
 #### adding extra states
-type FilterTrajectoryResult
+type FilterTrajectoryResultAugment
     carid::Int
     x_arr::Vector{Float64}
     y_arr::Vector{Float64}
@@ -198,7 +198,7 @@ type FilterTrajectoryResult
 
 
     ########## Filter trajectory - setting up the data to filter theta and velocity ##########
-    function FilterTrajectoryResult(trajdata::NGSIMTrajdata, carid::Int)
+    function FilterTrajectoryResultAugment(trajdata::NGSIMTrajdataAugment, carid::Int)
         dfstart = trajdata.car2start[carid]
         N = trajdata.df[dfstart, :n_frames_in_dataset]
 
@@ -234,11 +234,11 @@ end
 
 
 
-Base.length(ftr::FilterTrajectoryResult) = length(ftr.x_arr)
+Base.length(ftr::FilterTrajectoryResultAugment) = length(ftr.x_arr)
 
 ## Change this!
 ############# using EKF to filter trajectory #############
-function filter_trajectory!(ftr::FilterTrajectoryResult, ν::VehicleSystem = VehicleSystem())
+function filter_trajectory!(ftr::FilterTrajectoryResultAugment, ν::VehicleSystemAugment = VehicleSystemAugment())
 
     μ = [ftr.x_arr[1], ftr.y_arr[1], ftr.θ_arr[1], ftr.v_arr[1], ftr.ω_arr[1], ftr.a_arr[1]]    # initial belief
 
@@ -256,7 +256,7 @@ function filter_trajectory!(ftr::FilterTrajectoryResult, ν::VehicleSystem = Veh
         z[2] = ftr.y_arr[i]
 
         # apply extended Kalman filter
-        # VehicleSystem, belief of state, covariance of belief, applied control, observation
+        # VehicleSystemAugment, belief of state, covariance of belief, applied control, observation
         μ, Σ = EKF(ν, μ, Σ, u, z)
 
         # store results
@@ -272,7 +272,7 @@ function filter_trajectory!(ftr::FilterTrajectoryResult, ν::VehicleSystem = Veh
 end
 
 
-function Base.copy!(trajdata::NGSIMTrajdata, ftr::FilterTrajectoryResult)
+function Base.copy!(trajdata::NGSIMTrajdataAugment, ftr::FilterTrajectoryResultAugment)
 
     dfstart = trajdata.car2start[ftr.carid]
     N = trajdata.df[dfstart, :n_frames_in_dataset]
@@ -293,12 +293,12 @@ function Base.copy!(trajdata::NGSIMTrajdata, ftr::FilterTrajectoryResult)
     trajdata
 end
 
-function filter_trajectory!(trajdata::NGSIMTrajdata, carid::Int)
+function filter_trajectory!(trajdata::NGSIMTrajdataAugment, carid::Int)
     #=
     Filters the given vehicle's trajectory using an Extended Kalman Filter
     =#
 
-    ftr = FilterTrajectoryResult(trajdata, carid)
+    ftr = FilterTrajectoryResultAugment(trajdata, carid)
 
     # run pre-smoothing
     ftr.x_arr = symmetric_exponential_moving_average(ftr.x_arr, SMOOTHING_WIDTH_POS)
@@ -314,7 +314,7 @@ end
 function load_ngsim_trajdata(filepath::AbstractString, roadway::Roadway)
 
     print("loading from file: "); tic()
-    tdraw = NGSIMTrajdata(filepath, roadway)
+    tdraw = NGSIMTrajdataAugment(filepath, roadway)
     toc()
 
     if splitext(filepath)[2] == ".txt" # txt is original
@@ -328,7 +328,7 @@ function load_ngsim_trajdata(filepath::AbstractString, roadway::Roadway)
     tdraw
 end
 
-function Base.convert(::Type{Trajdata}, tdraw::NGSIMTrajdata)
+function Base.convert(::Type{Trajdata}, tdraw::NGSIMTrajdataAugment)
 
     df = tdraw.df
 

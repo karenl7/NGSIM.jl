@@ -2,7 +2,7 @@
 
 using Distributions
 
-type VehicleSystem
+type VehicleSystemAugment
     H::Matrix{Float64} # observation Jacobian
     R::MvNormal # process noise
     Q::MvNormal # observation noise
@@ -13,7 +13,7 @@ type VehicleSystem
 
     # the state vector is (x, y, θ, v, uw, ua) uw is the control for heading ua is the contorl for speed
 
-    function VehicleSystem(;
+    function VehicleSystemAugment(;
         process_noise::Float64 = 0.077,
         observation_noise::Float64 = 16.7,
         control_noise_accel::Float64 = 16.7,        
@@ -24,7 +24,7 @@ type VehicleSystem
         H = [1.0 0.0 0.0 0.0 0.0 0.0;   # state is (x, y, θ, v, w, a), only observing the positions
              0.0 1.0 0.0 0.0 0.0 0.0]
         r = process_noise
-        R = MvNormal(diagm([r*0.01, r*0.01, r*0.00001, r*0.1, r*10.0, r*10.0])) # process, TODO: tune this  MvNormal: # multivariate normal distribution with zero mean and covariance C.
+        R = MvNormal(diagm([r*0.01, r*0.01, r*0.00001, r*0.1, r*0.01, r*0.01])) # process, TODO: tune this  MvNormal: # multivariate normal distribution with zero mean and covariance C.
         q = observation_noise
         Q = MvNormal(diagm([q, q])) # obs, TODO: tune this   MvNormal: # multivariate normal distribution with zero mean and covariance C.
 
@@ -36,10 +36,10 @@ end
 
 
 
-draw_proc_noise(ν::VehicleSystem) = rand(ν.R)   # produce a random variable with covariance R
-draw_obs_noise(ν::VehicleSystem) = rand(ν.Q)    # produce a random variable with covariance Q
-get_process_noise_covariance(ν::VehicleSystem) = ν.R.Σ.mat # given VehicleSystem, get the process noise covariance matrix
-get_observation_noise_covariance(ν::VehicleSystem) = ν.Q.Σ.mat # given VehicleSystem, get the observation noice covariance matrix
+draw_proc_noise(ν::VehicleSystemAugment) = rand(ν.R)   # produce a random variable with covariance R
+draw_obs_noise(ν::VehicleSystemAugment) = rand(ν.Q)    # produce a random variable with covariance Q
+get_process_noise_covariance(ν::VehicleSystemAugment) = ν.R.Σ.mat # given VehicleSystemAugment, get the process noise covariance matrix
+get_observation_noise_covariance(ν::VehicleSystemAugment) = ν.Q.Σ.mat # given VehicleSystemAugment, get the observation noice covariance matrix
 
 """
     To derive the covariance of the additional motion noise,
@@ -50,7 +50,7 @@ get_observation_noise_covariance(ν::VehicleSystem) = ν.Q.Σ.mat # given Vehicl
 """
 
 ####### change this! 4x4 to account for a and omega
-function get_control_noise_in_control_space(ν::VehicleSystem, u::Vector{Float64})
+function get_control_noise_in_control_space(ν::VehicleSystemAugment, u::Vector{Float64})
     [ν.control_noise_accel 0.0;
      0.0 ν.control_noise_turnrate]
 end
@@ -65,7 +65,7 @@ end
         - u is the control [a,ω]ᵀ
         - x is the state estimate [x,y,θ,v]ᵀ
 """
-function get_transform_control_noise_to_state_space(ν::VehicleSystem, u::Vector{Float64}, x::Vector{Float64})
+function get_transform_control_noise_to_state_space(ν::VehicleSystemAugment, u::Vector{Float64}, x::Vector{Float64})
     x, y, θ, v, ω, a = x[1], x[2], x[3], x[4], x[5], x[6]
     u_a, u_ω   = u[1], u[2]
     ω² = ω*ω
@@ -103,7 +103,7 @@ end
         - x is the state estimate [x,y,θ,v]ᵀ
         - u is the control [a,ω]ᵀ
 """
-function step(ν::VehicleSystem, x::Vector{Float64}, u::Vector{Float64})
+function step(ν::VehicleSystemAugment, x::Vector{Float64}, u::Vector{Float64})
 
     x, y, θ, v, ω, a = x[1], x[2], x[3], x[4], x[5], x[6]
     u_a, u_ω   = u[1], u[2]
@@ -142,7 +142,7 @@ end
         - ν is the vehicle concrete type
         - x is the state estimate [x,y,θ,v]ᵀ
 """
-observe(ν::VehicleSystem, x::Vector{Float64}) = [x[1], x[2]]
+observe(ν::VehicleSystemAugment, x::Vector{Float64}) = [x[1], x[2]]
 
 """
     Computes the observation Jacobian (H matrix)
@@ -150,7 +150,7 @@ observe(ν::VehicleSystem, x::Vector{Float64}) = [x[1], x[2]]
         - ν is the vehicle concrete type
         - x is the state estimate [x,y,θ,v]ᵀ
 """
-compute_observation_jacobian(ν::VehicleSystem, x::Vector{Float64}) = ν.H
+compute_observation_jacobian(ν::VehicleSystemAugment, x::Vector{Float64}) = ν.H
 
 """
     Computes the dynamics Jacobian
@@ -159,7 +159,7 @@ compute_observation_jacobian(ν::VehicleSystem, x::Vector{Float64}) = ν.H
         - x is the vehicle state [x,y,θ,v]ᵀ
         - u is the control [a,ω]
 """
-function compute_dynamics_jacobian(ν::VehicleSystem, x::Vector{Float64}, u::Vector{Float64})
+function compute_dynamics_jacobian(ν::VehicleSystemAugment, x::Vector{Float64}, u::Vector{Float64})
     Δt = ν.Δt
     x, y, θ, v, ω, a = x[1], x[2], x[3], x[4], x[5], x[6]
     u_a, u_ω   = u[1], u[2]
@@ -189,7 +189,7 @@ function compute_dynamics_jacobian(ν::VehicleSystem, x::Vector{Float64}, u::Vec
 end
 
 function EKF(
-    ν::VehicleSystem,
+    ν::VehicleSystemAugment,
     μ::Vector{Float64}, # mean of belief at time t-1
     Σ::Matrix{Float64}, # cov of belief at time t-1
     u::Vector{Float64}, # next applied control
@@ -218,7 +218,7 @@ type SimulationResults
     μ_arr::Matrix{Float64}
     Σ_arr::Array{Float64, 3}
 end
-function simulate(ν::VehicleSystem, nsteps::Int64, x₀::Vector{Float64})
+function simulate(ν::VehicleSystemAugment, nsteps::Int64, x₀::Vector{Float64})
     x_arr = fill(NaN, 6, nsteps+1)
     z_arr = fill(NaN, 2, nsteps)
     u_arr = fill(NaN, 2, nsteps)
