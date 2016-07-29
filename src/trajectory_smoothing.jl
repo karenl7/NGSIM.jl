@@ -24,7 +24,7 @@ type VehicleSystem
         H = [1.0 0.0 0.0 0.0 0.0 0.0;   # state is (x, y, θ, v, w, a), only observing the positions
              0.0 1.0 0.0 0.0 0.0 0.0]
         r = process_noise
-        R = MvNormal(diagm([r*0.01, r*0.01, r*0.00001, r*0.1, r*10.0, r*10.0])) # process, TODO: tune this  MvNormal: # multivariate normal distribution with zero mean and covariance C.
+        R = MvNormal(diagm([r*0.01, r*0.01, r*0.00001, r*0.1, r*50.0, r*50.0])) # process, TODO: tune this  MvNormal: # multivariate normal distribution with zero mean and covariance C.
         q = observation_noise
         Q = MvNormal(diagm([q, q])) # obs, TODO: tune this   MvNormal: # multivariate normal distribution with zero mean and covariance C.
 
@@ -46,7 +46,7 @@ get_observation_noise_covariance(ν::VehicleSystem) = ν.Q.Σ.mat # given Vehicl
     we first determine the covariance matrix of the noise in control space
     Inputs:
         - ν is the vehicle concrete type
-        - u is the control [a,ω]ᵀ
+        - u is the control [δ,a]ᵀ
 """
 
 ####### change this! 4x4 to account for a and omega
@@ -62,37 +62,34 @@ end
     with respect to the motion parameters
     Inputs:
         - ν is the vehicle concrete type
-        - u is the control [a,ω]ᵀ
+        - u is the control [δ,a]ᵀ
         - x is the state estimate [x,y,θ,v]ᵀ
 """
 function get_transform_control_noise_to_state_space(ν::VehicleSystem, u::Vector{Float64}, x::Vector{Float64})
-    x, y, θ, v, ω, a = x[1], x[2], x[3], x[4], x[5], x[6]
-    u_a, u_ω   = u[1], u[2]
-    ω² = ω*ω
+    x, y, θ, v, δ, a = x[1], x[2], x[3], x[4], x[5], x[6]
+    b1, b2   = u[1], u[2]
     Δt = ν.Δt 
-    W = u_ω + ω
-    A = u_a + a
-    ϕ = θ + W*Δt
+    D = δ + b1
+    A = a + b2
+    quad = 0.5*A*Δt*Δt + v*Δt # *D + θ
 
 
 
-    if abs(ω) < 1e-6                                                            # why does Tim have zeros on the first column?/higher order terms?
-        [0.5*cos(θ)*Δt*Δt     0.0;
-         0.5*cos(θ)*Δt*Δt     0.0;
-         0.0                  Δt;
-         Δt                   0.0;
-         0.0                  0.0;
-         0.0                  0.0]
+
+    if abs(δ+b1) < 1e-6                                                            # why does Tim have zeros on the first column?/higher order terms?
+        [0.0    0.5*Δt*Δt*cos(θ); 
+         0.0    0.5*Δt*Δt*sin(θ);
+         0.0           Δt; 
+         0.0           0.0;
+         0.0           0.0;
+         0.0           0.0]
     else    
-        ∂f∂uw1 = 1/W^3 * (2*A*cos(θ) + (-2*A + Δt*(A*Δt + v)*W^2)*cos(ϕ) + v*W*sin(θ) - (2*A*Δt + v)*W*sin(ϕ))
-        ∂f∂uw2 = 1/W^3 * (-v*W*cos(θ) + (2*A*Δt + v)*W*cos(ϕ) + 2*A*sin(θ) + (-2*A + Δt*(A*Δt + v)*W^2)*sin(ϕ)) 
-
-        [ 1/W^2*(-cos(θ) + cos(W*Δt + θ) + Δt*W*sin(W*Δt+θ))        ∂f∂uw1;
-          1/W^2*(-Δt*W*cos(W*Δt+θ) - sin(θ) + sin(W*Δt + θ))        ∂f∂uw2;
-          0.0                                                       Δt;
-          Δt                                                        0.0;   
-          0.0                                                       0.0;
-          0.0                                                       0.0]
+        [1/D^2*(D*quad*cos(quad*D+θ) + sin(θ) - sin(quad*D+θ))                 0.5*Δt*Δt*cos(quad*D+θ);
+         1/D^2*(-cos(θ) + cos(quad*D+θ) + D*quad*sin(quad*D+θ))                0.5*Δt*Δt*sin(quad*D+θ); 
+                        0.5*A*Δt*Δt + v*Δt                                           0.5*Δt*Δt*D;  
+                                0.0                                                       Δt;
+                                0.0                                                       0.0;  
+                                0.0                                                       0.0]                               
     end
 end
 
@@ -101,38 +98,37 @@ end
     Inputs:
         - ν is the vehicle concrete type
         - x is the state estimate [x,y,θ,v]ᵀ
-        - u is the control [a,ω]ᵀ
+        - u is the control [δ,a]ᵀ
 """
 function step(ν::VehicleSystem, x::Vector{Float64}, u::Vector{Float64})
 
-    x, y, θ, v, ω, a = x[1], x[2], x[3], x[4], x[5], x[6]
-    u_a, u_ω   = u[1], u[2]
+    x, y, θ, v, δ, a = x[1], x[2], x[3], x[4], x[5], x[6]
+    b1, b2   = u[1], u[2]       
     δt = ν.Δt/ν.n_integration_steps
-    W = u_ω + ω
-    A = u_a + a
-    ϕ = θ + W*δt
+    D = δ + b1
+    A = a + b2
+    quad = 0.5*A*δt*δt + v*δt # *D + θ
 
-    δt = ν.Δt/ν.n_integration_steps
 
     for i in 1 : ν.n_integration_steps
 
-        if abs(ω) < 1e-6 # simulate straight
-            x += v*cos(θ)*δt + 0.5*A*cos(θ)*δt*δt
-            y += v*sin(θ)*δt + 0.5*A*sin(θ)*δt*δt
-            θ += u_ω*δt 
+        if abs(δ+b1) < 1e-6 # simulate straight
+            x += quad*cos(θ)
+            y += quad*sin(θ)
+            
         else # simulate with an arc
-            x += 1/W^2 * (-A*cos(θ) + A*cos(ϕ) + W*(- v*sin(θ) + (A*δt+v)*sin(ϕ)))               # double checked! I think it is good
-            y += 1/W^2 * (v*W*cos(θ) - (A*δt+v)*W*cos(ϕ) + A*(-sin(θ)+sin(ϕ)))
-            θ += W*δt
+            x += 1/D*(sin(quad*D+θ) - sin(θ))             # double checked! I think it is good
+            y += 1/D*(cos(θ) - cos(quad*D+θ))
+            θ += quad*D 
         end
 
         v += A*δt
-        # ω = ω
+        # δ = δ
         # a = a
 
     end
 
-    [x,y,θ,v,ω,a]
+    [x,y,θ,v,δ,a]
 end
 
 
@@ -157,34 +153,34 @@ compute_observation_jacobian(ν::VehicleSystem, x::Vector{Float64}) = ν.H
     Inputs:
         - ν is the vehicle
         - x is the vehicle state [x,y,θ,v]ᵀ
-        - u is the control [a,ω]
+        - u is the control [δ,a]
 """
 function compute_dynamics_jacobian(ν::VehicleSystem, x::Vector{Float64}, u::Vector{Float64})
-    Δt = ν.Δt
-    x, y, θ, v, ω, a = x[1], x[2], x[3], x[4], x[5], x[6]
-    u_a, u_ω   = u[1], u[2]
-    W = u_ω + ω
-    A = u_a + a
-    ϕ = θ + W*Δt
+    x, y, θ, v, δ, a = x[1], x[2], x[3], x[4], x[5], x[6]
+    b1, b2   = u[1], u[2]
+    Δt = ν.Δt 
+    D = δ + b1
+    A = a + b2
+    quad = 0.5*A*Δt*Δt + v*Δt # *D + θ
 
 
 
-    if abs(ω) < 1e-6
+    if abs(δ + b1) < 1e-6
         # drive straight                                                                                # double checked. I think its ok
-        [1.0 0.0   -0.5*Δt*(A*Δt+2*v)*sin(θ)       cos(θ)*Δt    0.0     0.5*Δt*Δt*cos(θ);
-         0.0 1.0   0.5*Δt*(A*Δt+2*v)*cos(θ)        sin(θ)*Δt    0.0     0.5*Δt*Δt*sin(θ);
-         0.0 0.0               1.0                   0.0        0.0     0.0;
-         0.0 0.0               0.0                   1.0        0.0     Δt;
-         0.0 0.0               0.0                   0.0        1.0     0.0;
-         0.0 0.0               0.0                   0.0        0.0     1.0]
+        [1.0 0.0   -quad*sin(θ)   Δt*cos(θ)    0.0     0.5*Δt*Δt*cos(θ);
+         0.0 1.0   quad*cos(θ)    Δt*sin(θ)    0.0     0.5*Δt*Δt*sin(θ);
+         0.0 0.0       1.0          0.0        0.0          0.0;
+         0.0 0.0       0.0          1.0        0.0          Δt;
+         0.0 0.0       0.0          0.0        1.0          0.0;
+         0.0 0.0       0.0          0.0        0.0          1.0]
     else                                                                                                # double checked. I think its ok
         # drive in an arc               
-        [1.0 0.0  1/W^2*(-v*W*cos(θ)+(A*Δt+v)*W*cos(ϕ)+A*(sin(θ)-sin(ϕ)))     1/W*(-sin(θ)+sin(ϕ))     1/W^3*(2*A*cos(θ)+(-2*A+Δt*(A*Δt+v)*W^2)*cos(ϕ)+v*W*sin(θ)-(2*A*Δt+v)*W*sin(ϕ))     1/W^2*(-cos(θ)+cos(ϕ)+Δt*W*sin(ϕ));    
-         0.0 1.0  1/W^2*(-A*cos(θ)+A*cos(ϕ)-v*W*sin(θ)+(A*Δt+v)*W*sin(ϕ))     1/W*(cos(θ)-cos(ϕ))      1/W^3*(-v*W*cos(θ)+(2*A*Δt+v)*W*cos(ϕ)+2*A*sin(θ)+(-2*A+Δt*(A*Δt+v)*W^2)*sin(ϕ))     -1/W^2*(Δt*W*cos(ϕ)+sin(θ)-sin(ϕ));
-         0.0 0.0                            1.0                                       0.0                                                         Δt                                                       0.0;
-         0.0 0.0                            0.0                                       1.0                                                         0.0                                                      Δt;   
-         0.0 0.0                            0.0                                       0.0                                                         1.0                                                      0.0;
-         0.0 0.0                            0.0                                       0.0                                                         0.0                                                      1.0]
+        [1.0 0.0  1/D*(-cos(θ)+cos(quad*D+θ))     Δt*cos(quad*D+θ)     1/D^2*(quad*D*cos(quad*D+θ)+sin(θ)-sin(quad*D+θ))     0.5*Δt*Δt*cos(quad*D+θ);    
+         0.0 1.0  1/D*(-sin(θ)+sin(quad*D+θ))     Δt*sin(quad*D+θ)     1/D^2*(-cos(θ)+cos(quad*D+θ)+quad*D*sin(quad*D+θ))    0.5*Δt*Δt*sin(quad*D+θ);
+         0.0 0.0            1.0                          Δt*D                           0.5*A*Δt*Δt+v*Δt                          0.5*Δt*Δt*D;
+         0.0 0.0            0.0                          1.0                                 0.0                                       Δt;   
+         0.0 0.0            0.0                          0.0                                 1.0                                      0.0;
+         0.0 0.0            0.0                          0.0                                 0.0                                      1.0]
     end
 end
 

@@ -193,7 +193,8 @@ type FilterTrajectoryResult
     y_arr::Vector{Float64}
     θ_arr::Vector{Float64}
     v_arr::Vector{Float64}
-    ω_arr::Vector{Float64}
+    
+    δ_arr::Vector{Float64}
     a_arr::Vector{Float64}
 
 
@@ -207,7 +208,7 @@ type FilterTrajectoryResult
         y_arr = fill(NaN, N)
         θ_arr = fill(NaN, N)
         v_arr = fill(NaN, N)
-        ω_arr = fill(NaN, N)
+        δ_arr = fill(NaN, N)
         a_arr = fill(NaN, N)
 
         for i in 1 : N
@@ -220,7 +221,7 @@ type FilterTrajectoryResult
         # choose an initial belief
         θ_arr[1] = atan2(y_arr[5] - y_arr[1], x_arr[5] - x_arr[1])
         v_arr[1] = trajdata.df[dfstart, :speed] #hypot(ftr.y_arr[lookahead] - y₀, ftr.x_arr[lookahead] - x₀)/ν.Δt
-        ω_arr[1] = 0.0
+        δ_arr[1] = 0.0
         a_arr[1] = 0.0
 
         if v_arr[1] < 1.0 # small speed
@@ -228,7 +229,7 @@ type FilterTrajectoryResult
             θ_arr[1] = atan2(y_arr[end] - y_arr[1], x_arr[end] - x_arr[1])
         end
 
-        new(carid, x_arr, y_arr, θ_arr, v_arr, ω_arr, a_arr)
+        new(carid, x_arr, y_arr, θ_arr, v_arr, δ_arr, a_arr)
     end
 end
 
@@ -240,10 +241,10 @@ Base.length(ftr::FilterTrajectoryResult) = length(ftr.x_arr)
 ############# using EKF to filter trajectory #############
 function filter_trajectory!(ftr::FilterTrajectoryResult, ν::VehicleSystem = VehicleSystem())
 
-    μ = [ftr.x_arr[1], ftr.y_arr[1], ftr.θ_arr[1], ftr.v_arr[1], ftr.ω_arr[1], ftr.a_arr[1]]    # initial belief
+    μ = [ftr.x_arr[1], ftr.y_arr[1], ftr.θ_arr[1], ftr.v_arr[1], ftr.δ_arr[1], ftr.a_arr[1]]    # initial belief
 
     σ = 1e-1                                                        # covariance on states (parameter)
-    Σ = diagm([σ*0.01, σ*0.01, σ*0.1, σ, σ*10.0, σ*10.0])                           # covariance matrix of states
+    Σ = diagm([σ*0.01, σ*0.01, σ*0.1, σ, σ*100.0, σ*100.0])                           # covariance matrix of states
 
     # assume control is centered
     u = [0.0, 0.0]     # 4 contron inputs 0 0 0 0                                              # guess for control; assume it is centered
@@ -264,7 +265,7 @@ function filter_trajectory!(ftr::FilterTrajectoryResult, ν::VehicleSystem = Veh
         ftr.y_arr[i] = μ[2]
         ftr.θ_arr[i] = μ[3]
         ftr.v_arr[i] = μ[4]
-        ftr.ω_arr[i] = μ[5]
+        ftr.δ_arr[i] = μ[5]
         ftr.a_arr[i] = μ[6]
     end
 
