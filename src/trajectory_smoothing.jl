@@ -1,6 +1,6 @@
 # Defining vehicle systems: info needed: Observer matrix, covariance matrix, integration steps, noise
 
-using Distributions
+using Distributions  # only required when you're running this file by itself, apart from NGSIM.jl
 
 type VehicleSystem
     H::Matrix{Float64} # observation Jacobian
@@ -12,13 +12,14 @@ type VehicleSystem
     control_noise_turnrate::Float64
 
     # the state vector is (x, y, θ, v, δ, a) δ is the control for steering angle a the acceleration
+    # NOTE: δ is not exactly the same as presented in Lavalle's Motion Planning book; here δ = (1 / turning radius)
     # tuning the variance!!
     function VehicleSystem(;
         process_noise::Float64 = 0.077,
         observation_noise::Float64 = 16.7,
-        control_noise_accel::Float64 = 16.7,        
-        control_noise_turnrate::Float64 = 0.46 
-        # control_noise_turnrate::Float64 = 1.0      
+        control_noise_accel::Float64 = 16.7,
+        control_noise_turnrate::Float64 = 0.46
+        # control_noise_turnrate::Float64 = 1.0
         )
 
         Δt = 0.1
@@ -37,8 +38,8 @@ end
 
 
 
-draw_proc_noise(ν::VehicleSystem) = rand(ν.R)   # produce a random variable with covariance R
-draw_obs_noise(ν::VehicleSystem) = rand(ν.Q)    # produce a random variable with covariance Q
+draw_proc_noise(ν::VehicleSystem) = rand(ν.R)   # drawing a sample from the random variable R
+draw_obs_noise(ν::VehicleSystem) = rand(ν.Q)    # drawing a sample from the random variable Q
 get_process_noise_covariance(ν::VehicleSystem) = ν.R.Σ.mat # given VehicleSystem, get the process noise covariance matrix
 get_observation_noise_covariance(ν::VehicleSystem) = ν.Q.Σ.mat # given VehicleSystem, get the observation noice covariance matrix
 
@@ -69,28 +70,25 @@ end
 function get_transform_control_noise_to_state_space(ν::VehicleSystem, u::Vector{Float64}, x::Vector{Float64})
     x, y, θ, v, δ, a = x[1], x[2], x[3], x[4], x[5], x[6]
     b1, b2   = u[1], u[2]
-    Δt = ν.Δt 
+    Δt = ν.Δt
     D = δ + b1
     A = a + b2
     quad = 0.5*A*Δt*Δt + v*Δt # *D + θ
 
-
-
-
-    if abs(δ+b1) < 1e-6                                                            # why does Tim have zeros on the first column?/higher order terms?
-        [0.0    0.5*Δt*Δt*cos(θ); 
-         0.0    0.5*Δt*Δt*sin(θ);
-         0.0           Δt; 
-         0.0           0.0;
-         0.0           0.0;
-         0.0           0.0]
-    else    
+    if abs(D) < 1e-6
+        [-quad^2*sin(θ)/2          0.5*Δt*Δt*cos(quad*D+θ);
+         quad^2*cos(θ)/2           0.5*Δt*Δt*sin(quad*D+θ);
+         quad                          0.5*Δt*Δt*D;
+         0.0                              Δt;
+         0.0                              0.0;
+         0.0                              0.0]
+    else
         [1/D^2*(D*quad*cos(quad*D+θ) + sin(θ) - sin(quad*D+θ))                 0.5*Δt*Δt*cos(quad*D+θ);
-         1/D^2*(-cos(θ) + cos(quad*D+θ) + D*quad*sin(quad*D+θ))                0.5*Δt*Δt*sin(quad*D+θ); 
-                        0.5*A*Δt*Δt + v*Δt                                           0.5*Δt*Δt*D;  
-                                0.0                                                       Δt;
-                                0.0                                                       0.0;  
-                                0.0                                                       0.0]                               
+         1/D^2*(-cos(θ) + cos(quad*D+θ) + D*quad*sin(quad*D+θ))                0.5*Δt*Δt*sin(quad*D+θ);
+                        quad                                                   0.5*Δt*Δt*D;
+                        0.0                                                       Δt;
+                        0.0                                                       0.0;
+                        0.0                                                       0.0]
     end
 end
 
@@ -102,9 +100,8 @@ end
         - u is the control [δ,a]ᵀ
 """
 function step(ν::VehicleSystem, x::Vector{Float64}, u::Vector{Float64})
-
     x, y, θ, v, δ, a = x[1], x[2], x[3], x[4], x[5], x[6]
-    b1, b2   = u[1], u[2]       
+    b1, b2   = u[1], u[2]
     δt = ν.Δt/ν.n_integration_steps
     D = δ + b1
     A = a + b2
@@ -113,21 +110,20 @@ function step(ν::VehicleSystem, x::Vector{Float64}, u::Vector{Float64})
 
     for i in 1 : ν.n_integration_steps
 
-        if abs(δ+b1) < 1e-6 # simulate straight
-            x += quad*cos(θ)
-            y += quad*sin(θ)
-            
-        else # simulate with an arc
-            x += 1/D*(sin(quad*D+θ) - sin(θ))             # double checked! I think it is good
-            y += 1/D*(cos(θ) - cos(quad*D+θ))
-            θ += quad*D 
+            if abs(D) < 1e-6 # simulate straight
+                x += quad*cos(θ) - quad^2*sin(θ)*D/2   # higher order term probably unnecessary
+                y += quad*sin(θ) + quad^2*cos(θ)*D/2
+            else # simulate with an arc
+                x += 1/D*(sin(quad*D+θ) - sin(θ))             # double checked! I think it is good
+                y += 1/D*(cos(θ) - cos(quad*D+θ))
+            end
+
+            θ += quad*D
+            v += A*δt
+            # δ = δ
+            # a = a
+
         end
-
-        v += A*δt
-        # δ = δ
-        # a = a
-
-    end
 
     [x,y,θ,v,δ,a]
 end
@@ -159,27 +155,25 @@ compute_observation_jacobian(ν::VehicleSystem, x::Vector{Float64}) = ν.H
 function compute_dynamics_jacobian(ν::VehicleSystem, x::Vector{Float64}, u::Vector{Float64})
     x, y, θ, v, δ, a = x[1], x[2], x[3], x[4], x[5], x[6]
     b1, b2   = u[1], u[2]
-    Δt = ν.Δt 
+    Δt = ν.Δt
     D = δ + b1
     A = a + b2
     quad = 0.5*A*Δt*Δt + v*Δt # *D + θ
 
-
-
     if abs(δ + b1) < 1e-6
         # drive straight                                                                                # double checked. I think its ok
-        [1.0 0.0   -quad*sin(θ)   Δt*cos(θ)    0.0     0.5*Δt*Δt*cos(θ);
-         0.0 1.0   quad*cos(θ)    Δt*sin(θ)    0.0     0.5*Δt*Δt*sin(θ);
-         0.0 0.0       1.0          0.0        0.0          0.0;
-         0.0 0.0       0.0          1.0        0.0          Δt;
-         0.0 0.0       0.0          0.0        1.0          0.0;
-         0.0 0.0       0.0          0.0        0.0          1.0]
+        [1.0 0.0   -quad*sin(θ) - quad^2*cos(θ)*D/2   Δt*cos(quad*D+θ)    -quad^2*sin(θ)/2    0.5*Δt*Δt*cos(quad*D+θ);(θ);
+         0.0 1.0   quad*cos(θ) - quad^2*sin(θ)*D/2    Δt*sin(quad*D+θ)    quad^2*cos(θ)/2     0.5*Δt*Δt*sin(quad*D+θ);(θ);
+         0.0 0.0                 1.0                    Δt*D                   quad                0.5*Δt*Δt*D;
+         0.0 0.0                 0.0                    1.0                    0.0                      Δt;
+         0.0 0.0                 0.0                    0.0                    1.0                     0.0;
+         0.0 0.0                 0.0                    0.0                    0.0                     1.0]
     else                                                                                                # double checked. I think its ok
-        # drive in an arc               
-        [1.0 0.0  1/D*(-cos(θ)+cos(quad*D+θ))     Δt*cos(quad*D+θ)     1/D^2*(quad*D*cos(quad*D+θ)+sin(θ)-sin(quad*D+θ))     0.5*Δt*Δt*cos(quad*D+θ);    
+        # drive in an arc
+        [1.0 0.0  1/D*(-cos(θ)+cos(quad*D+θ))     Δt*cos(quad*D+θ)     1/D^2*(quad*D*cos(quad*D+θ)+sin(θ)-sin(quad*D+θ))     0.5*Δt*Δt*cos(quad*D+θ);
          0.0 1.0  1/D*(-sin(θ)+sin(quad*D+θ))     Δt*sin(quad*D+θ)     1/D^2*(-cos(θ)+cos(quad*D+θ)+quad*D*sin(quad*D+θ))    0.5*Δt*Δt*sin(quad*D+θ);
-         0.0 0.0            1.0                          Δt*D                           0.5*A*Δt*Δt+v*Δt                          0.5*Δt*Δt*D;
-         0.0 0.0            0.0                          1.0                                 0.0                                       Δt;   
+         0.0 0.0            1.0                          Δt*D                                quad                                 0.5*Δt*Δt*D;
+         0.0 0.0            0.0                          1.0                                 0.0                                       Δt;
          0.0 0.0            0.0                          0.0                                 1.0                                      0.0;
          0.0 0.0            0.0                          0.0                                 0.0                                      1.0]
     end
@@ -203,7 +197,7 @@ function EKF(
     H = compute_observation_jacobian(ν, μbar)
     K = Σbar * H' / (H*Σbar*H' + get_observation_noise_covariance(ν))  # (K = PH'(HPH'+R)^{-1})
     μ_next = μbar + K*(z - observe(ν, μbar))
-    
+
     Σ_next = Σbar - K*H*Σbar
     (μ_next, Σ_next)
 end
