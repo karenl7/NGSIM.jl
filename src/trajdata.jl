@@ -244,7 +244,7 @@ function filter_trajectory!(ftr::FilterTrajectoryResult, ν::VehicleSystem = Veh
     μ = [ftr.x_arr[1], ftr.y_arr[1], ftr.θ_arr[1], ftr.v_arr[1], ftr.δ_arr[1], ftr.a_arr[1]]    # initial belief
 
     σ = 1e-1                                                        # covariance on states (parameter)
-    Σ = diagm([σ*0.01, σ*0.01, σ*0.1, σ, σ*100.0, σ*100.0])                           # covariance matrix of states
+    Σ = diagm([σ*0.01, σ*0.01, σ*0.1, σ, σ, σ])                           # covariance matrix of states
 
     # assume control is centered
     u = [0.0, 0.0]     # 4 contron inputs 0 0 0 0                                              # guess for control; assume it is centered
@@ -406,3 +406,7 @@ function load_trajdata(filepath::AbstractString)
     td
 end
 load_trajdata(i::Int) = load_trajdata(TRAJDATA_PATHS[i])
+
+
+
+

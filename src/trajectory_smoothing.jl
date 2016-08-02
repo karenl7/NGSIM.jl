@@ -11,20 +11,21 @@ type VehicleSystem
     control_noise_accel::Float64
     control_noise_turnrate::Float64
 
-    # the state vector is (x, y, θ, v, uw, ua) uw is the control for heading ua is the contorl for speed
-
+    # the state vector is (x, y, θ, v, δ, a) δ is the control for steering angle a the acceleration
+    # tuning the variance!!
     function VehicleSystem(;
         process_noise::Float64 = 0.077,
         observation_noise::Float64 = 16.7,
         control_noise_accel::Float64 = 16.7,        
-        control_noise_turnrate::Float64 = 0.46      
+        control_noise_turnrate::Float64 = 0.46 
+        # control_noise_turnrate::Float64 = 1.0      
         )
 
         Δt = 0.1
         H = [1.0 0.0 0.0 0.0 0.0 0.0;   # state is (x, y, θ, v, w, a), only observing the positions
              0.0 1.0 0.0 0.0 0.0 0.0]
         r = process_noise
-        R = MvNormal(diagm([r*0.01, r*0.01, r*0.00001, r*0.1, r*50.0, r*50.0])) # process, TODO: tune this  MvNormal: # multivariate normal distribution with zero mean and covariance C.
+        R = MvNormal(diagm([r*0.01, r*0.01, r*0.00001, r*0.1, r*0.1, r*0.1])) # process, TODO: tune this  MvNormal: # multivariate normal distribution with zero mean and covariance C.
         q = observation_noise
         Q = MvNormal(diagm([q, q])) # obs, TODO: tune this   MvNormal: # multivariate normal distribution with zero mean and covariance C.
 
@@ -51,8 +52,8 @@ get_observation_noise_covariance(ν::VehicleSystem) = ν.Q.Σ.mat # given Vehicl
 
 ####### change this! 4x4 to account for a and omega
 function get_control_noise_in_control_space(ν::VehicleSystem, u::Vector{Float64})
-    [ν.control_noise_accel 0.0;
-     0.0 ν.control_noise_turnrate]
+    [ν.control_noise_turnrate 0.0;
+     0.0 ν.control_noise_accel]
 end
 
 """
