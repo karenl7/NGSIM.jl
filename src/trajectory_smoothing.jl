@@ -162,8 +162,8 @@ function compute_dynamics_jacobian(ν::VehicleSystem, x::Vector{Float64}, u::Vec
 
     if abs(δ + b1) < 1e-6
         # drive straight                                                                                # double checked. I think its ok
-        [1.0 0.0   -quad*sin(θ) - quad^2*cos(θ)*D/2   Δt*cos(quad*D+θ)    -quad^2*sin(θ)/2    0.5*Δt*Δt*cos(quad*D+θ);(θ);
-         0.0 1.0   quad*cos(θ) - quad^2*sin(θ)*D/2    Δt*sin(quad*D+θ)    quad^2*cos(θ)/2     0.5*Δt*Δt*sin(quad*D+θ);(θ);
+        [1.0 0.0   -quad*sin(θ) - quad^2*cos(θ)*D/2   Δt*cos(quad*D+θ)    -quad^2*sin(θ)/2    0.5*Δt*Δt*cos(quad*D+θ);
+         0.0 1.0   quad*cos(θ) - quad^2*sin(θ)*D/2    Δt*sin(quad*D+θ)    quad^2*cos(θ)/2     0.5*Δt*Δt*sin(quad*D+θ);
          0.0 0.0                 1.0                    Δt*D                   quad                0.5*Δt*Δt*D;
          0.0 0.0                 0.0                    1.0                    0.0                      Δt;
          0.0 0.0                 0.0                    0.0                    1.0                     0.0;
