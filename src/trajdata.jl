@@ -221,7 +221,7 @@ type FilterTrajectoryResult
         # choose an initial belief
         θ_arr[1] = atan2(y_arr[5] - y_arr[1], x_arr[5] - x_arr[1])
         v_arr[1] = trajdata.df[dfstart, :speed] # hypot(ftr.y_arr[lookahead] - y₀, ftr.x_arr[lookahead] - x₀)/ν.Δt
-        v₊ = trajdata.df[dfstart+1, :speed] 
+        v₊ = trajdata.df[dfstart+5, :speed] 
         δ_arr[1] = 0.0
         a_arr[1] = (v₊ - v_arr[1])/ν.Δt;
 
