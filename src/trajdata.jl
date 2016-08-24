@@ -45,20 +45,23 @@ type NGSIMTrajdata
     car2start  :: Dict{Int, Int}         # maps carindex to starting index in the df
     frame2cars :: Dict{Int, Vector{Int}} # maps frame to list of carids in the scene
     roadway    :: Roadway
+    ν          :: VehicleSystem
 
     ########## extracting the original raw data ##########
 
-    function NGSIMTrajdata(input_path::AbstractString, roadway::Roadway)
+    function NGSIMTrajdata(input_path::AbstractString, roadway::Roadway, ν = VehicleSystem())
 
         @assert(isfile(input_path))
 
         df = readtable(input_path, separator=' ', header = false)
         col_names = [:id, :frame, :n_frames_in_dataset, :epoch, :local_x, :local_y, :global_x, :global_y, :length, :width, :class, :speed, :acc, :lane, :carind_front, :carind_rear, :dist_headway, :time_headway]
         for (i,name) in enumerate(col_names)
-            rename!(df, symbol(@sprintf("x%d", i)), name)
+            rename!(df, Symbol(@sprintf("x%d", i)), name)
         end
 
         df[:global_heading] = fill(NaN, nrow(df))
+        df[:global_δ] = fill(NaN, nrow(df))  # curvature driver input
+        df[:global_a] = fill(NaN, nrow(df))  # curvature driver input
 
         car2start = Dict{Int, Int}()
         frame2cars = Dict{Int, Vector{Int}}()
@@ -76,7 +79,7 @@ type NGSIMTrajdata
             end
         end
 
-        new(df, car2start, frame2cars, roadway)
+        new(df, car2start, frame2cars, roadway, ν)
     end
 end
 
@@ -222,8 +225,8 @@ type FilterTrajectoryResult
         θ_arr[1] = atan2(y_arr[5] - y_arr[1], x_arr[5] - x_arr[1])
         v_arr[1] = trajdata.df[dfstart, :speed] # hypot(ftr.y_arr[lookahead] - y₀, ftr.x_arr[lookahead] - x₀)/ν.Δt
         v₊ = trajdata.df[dfstart+5, :speed] 
-        δ_arr[1] = 0.0
-        a_arr[1] = (v₊ - v_arr[1])/ν.Δt;
+        δ_arr[1] = 0.0    # possible TODO: initialize with mean road curvature
+        a_arr[1] = (v₊ - v_arr[1])/(5*NGSIM_TIMESTEP);
 
         if v_arr[1] < 1.0 # small speed
             # estimate with greater lookahead
@@ -283,13 +286,15 @@ function Base.copy!(trajdata::NGSIMTrajdata, ftr::FilterTrajectoryResult)
     for i in 1 : N
         trajdata.df[dfstart + i - 1, :global_x] = ftr.x_arr[i]
         trajdata.df[dfstart + i - 1, :global_y] = ftr.y_arr[i]
-        # trajdata.df[dfstart + i - 1, :speed]   = ftr.v_arr[i]
-        if i > 1
-            trajdata.df[dfstart + i - 1, :speed]   = hypot(ftr.x_arr[i] - ftr.x_arr[i-1], ftr.y_arr[i] - ftr.y_arr[i-1]) / NGSIM_TIMESTEP
-        else
-            trajdata.df[dfstart + i - 1, :speed]   = hypot(ftr.x_arr[i+1] - ftr.x_arr[i], ftr.y_arr[i+1] - ftr.y_arr[i]) / NGSIM_TIMESTEP
-        end
+        trajdata.df[dfstart + i - 1, :speed]   = ftr.v_arr[i]
+        # if i > 1
+        #     trajdata.df[dfstart + i - 1, :speed]   = hypot(ftr.x_arr[i] - ftr.x_arr[i-1], ftr.y_arr[i] - ftr.y_arr[i-1]) / NGSIM_TIMESTEP
+        # else
+        #     trajdata.df[dfstart + i - 1, :speed]   = hypot(ftr.x_arr[i+1] - ftr.x_arr[i], ftr.y_arr[i+1] - ftr.y_arr[i]) / NGSIM_TIMESTEP
+        # end
         trajdata.df[dfstart + i - 1, :global_heading] = ftr.θ_arr[i]
+        trajdata.df[dfstart + i - 1, :global_δ] = ftr.δ_arr[i]
+        trajdata.df[dfstart + i - 1, :global_a] = ftr.a_arr[i]
     end
 
     trajdata
@@ -306,17 +311,17 @@ function filter_trajectory!(trajdata::NGSIMTrajdata, carid::Int)
     ftr.x_arr = symmetric_exponential_moving_average(ftr.x_arr, SMOOTHING_WIDTH_POS)
     ftr.y_arr = symmetric_exponential_moving_average(ftr.y_arr, SMOOTHING_WIDTH_POS)
 
-    filter_trajectory!(ftr)
+    filter_trajectory!(ftr, trajdata.ν)
 
     copy!(trajdata, ftr)
     trajdata
 end
 
 
-function load_ngsim_trajdata(filepath::AbstractString, roadway::Roadway)
+function load_ngsim_trajdata(filepath::AbstractString, roadway::Roadway, ν = VehicleSystem())
 
     print("loading from file: "); tic()
-    tdraw = NGSIMTrajdata(filepath, roadway)
+    tdraw = NGSIMTrajdata(filepath, roadway, ν)
     toc()
 
     if splitext(filepath)[2] == ".txt" # txt is original
@@ -351,9 +356,21 @@ function Base.convert(::Type{Trajdata}, tdraw::NGSIMTrajdata)
             dfind = car_df_index(tdraw, id, frame)
 
             posG = VecSE2(df[dfind, :global_x]*METERS_PER_FOOT, df[dfind, :global_y]*METERS_PER_FOOT, df[dfind, :global_heading])
+            ### localize controls ("straightened", corresponding to Frenet coords)
+            local_δ = df[dfind, :global_δ]  # road seems "straight enough"...
+            # TODO: fix with something better; ideally would subtract curvature at that point, i.e.:
+            # function get_road_curve_pt(posG::VecSE2, roadway::Roadway)
+            #     roadproj = proj(posG, roadway)
+            #     roadind = RoadIndex(roadproj.curveproj.ind, roadproj.tag)
+            #     roadway[roadind]
+            # end
+            # get_road_curvature(posG::VecSE2, roadway::Roadway) = get_road_curve_pt(posG, roadway).k
+            local_a = df[dfind, :global_a]*METERS_PER_FOOT
+            u = VehicleControls(local_δ, local_a)
+            ###
             speed = df[dfind, :speed]*METERS_PER_FOOT
 
-            states[state_ind += 1] = TrajdataState(id, VehicleState(posG, tdraw.roadway, speed))
+            states[state_ind += 1] = TrajdataState(id, VehicleState(posG, tdraw.roadway, speed, u))
         end
 
         frame_hi = state_ind
@@ -364,7 +381,7 @@ function Base.convert(::Type{Trajdata}, tdraw::NGSIMTrajdata)
     Trajdata(tdraw.roadway, vehdefs, states, frames)
 end
 
-function convert_raw_ngsim_to_trajdatas()
+function convert_raw_ngsim_to_trajdatas(ν = VehicleSystem())
     for filename in ("i101_trajectories-0750am-0805am.txt",
                      "i101_trajectories-0805am-0820am.txt",
                      "i101_trajectories-0820am-0835am.txt",
@@ -378,8 +395,8 @@ function convert_raw_ngsim_to_trajdatas()
 
         filepath = Pkg.dir("NGSIM", "data", filename)
         roadway = startswith(filename, "i101") ? ROADWAY_101 : ROADWAY_80
-        tdraw = NGSIM.load_ngsim_trajdata(filepath, roadway)
-        td = convert(Trajdata, tdraw)
+        tdraw = NGSIM.load_ngsim_trajdata(filepath, roadway, ν)  # loads _and_ smooths
+        td = convert(Trajdata, tdraw)                            # converts NGSIMTrajdata -> Trajdata
 
         outpath = Pkg.dir("NGSIM", "data", "trajdata_"*filename)
         open(io->write(io, td), outpath, "w")
